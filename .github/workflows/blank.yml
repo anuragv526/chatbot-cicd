@@ -1,36 +1,57 @@
-# This is a basic workflow to help you get started with Actions
+name: create-s3-bucket
 
-name: CI
-
-# Controls when the workflow will run
+# Trigger this by hand from the Actions tab — it won't run on push.
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      bucket_name:
+        description: "Bucket name (must be globally unique, lowercase, no spaces)"
+        required: true
+      aws_region:
+        description: "AWS region"
+        required: true
+        default: "us-east-1"
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+permissions:
+  id-token: write   # REQUIRED — without this, GitHub won't issue the OIDC token
+  contents: read
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  create-bucket:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Check out repo
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Authenticate to AWS via OIDC (no access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # PASTE YOUR ROLE ARN FROM STEP 22 HERE:
+          role-to-assume: arn:aws:iam::483874865300:role/github-actions-oidc-role
+          aws-region: ${{ inputs.aws_region }}
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Confirm we're authenticated (sanity check)
+        run: aws sts get-caller-identity
+
+      - name: Create the bucket
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          if [ "${{ inputs.aws_region }}" = "us-east-1" ]; then
+            aws s3api create-bucket \
+              --bucket "${{ inputs.bucket_name }}" \
+              --region "${{ inputs.aws_region }}"
+          else
+            aws s3api create-bucket \
+              --bucket "${{ inputs.bucket_name }}" \
+              --region "${{ inputs.aws_region }}" \
+              --create-bucket-configuration LocationConstraint="${{ inputs.aws_region }}"
+          fi
+
+      - name: Block public access (safe default)
+        run: |
+          aws s3api put-public-access-block \
+            --bucket "${{ inputs.bucket_name }}" \
+            --public-access-block-configuration \
+            BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+      - name: Confirm it was created
+        run: aws s3 ls | grep "${{ inputs.bucket_name }}"
